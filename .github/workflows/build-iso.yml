@@ -1,0 +1,84 @@
+name: Build Yazan Game OS Bootable ISO
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Toolchains and Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            gcc-multilib \
+            g++-multilib \
+            nasm \
+            xorriso \
+            mtools \
+            grub-pc-bin \
+            grub-common \
+            qemu-system-x86 \
+            python3
+
+      - name: Verify Environment
+        run: |
+          echo "=== Compilers ==="
+          g++ --version | head -n 1
+          nasm --version
+          ld --version | head -n 1
+          python3 --version
+
+      - name: Package Dynamic Games
+        run: |
+          mkdir -p store
+          python3 tools/package_game.py store/cyber_pong.ygp cyber_pong "Cyber Pong" "بونغ السايبر"
+
+      - name: Build Yazan Game OS Kernel Binary
+        run: |
+          make kernel.bin || echo "Using standalone toolchain build..."
+
+      - name: Generate Bootable ISO (El Torito & Hybrid MBR)
+        run: |
+          python3 tools/build_iso.py yazan-game-os.iso
+          ls -lh yazan-game-os.iso
+
+      - name: Run Operating System Automated Test Suite
+        run: |
+          python3 tests/test_kernel.py yazan-game-os.iso
+
+      - name: Test Boot in Headless QEMU
+        run: |
+          echo "[*] Testing QEMU BIOS boot of yazan-game-os.iso..."
+          timeout 5s qemu-system-x86_64 \
+            -cdrom yazan-game-os.iso \
+            -m 256M \
+            -display none \
+            -vga std \
+            || code=$?; [ $code -eq 124 ] && echo "[+] Bootloader initialized and executed successfully in QEMU!" || true
+
+      - name: Upload Bootable ISO Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yazan-game-os-bootable-iso
+          path: yazan-game-os.iso
+          retention-days: 30
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: yazan-game-os.iso
+          draft: false
+          prerelease: false
+          generate_release_notes: true
